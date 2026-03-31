@@ -4,7 +4,7 @@ import os
 from groq import Groq
 
 # Cargar catálogo (solo una vez al iniciar el Space)
-df = pd.read_csv("catalogo.csv")
+df = pd.read_csv("catalogo_footloose_limpio.csv")
 catalogo_texto = df[["modelo","marca","categoria","genero","precio"]].to_string(index=False)
 
 # Cliente de Groq (usa la clave que guardaste en Secrets)
