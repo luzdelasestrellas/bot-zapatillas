@@ -4,91 +4,79 @@ import os
 from groq import Groq
 import google.generativeai as genai
 
-# ==================== CARGAR CATÁLOGO ====================
+# Cargar catálogo
 df = pd.read_csv("catalogo_footloose_limpio.csv")
 catalogo_texto = df[["modelo", "marca", "categoria", "genero", "precio"]].to_string(index=False)
 
-# ==================== CLIENTES API ====================
-# Groq
+# Clientes
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-# Gemini (cambia tu clave aquí)
+# Gemini
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-gemini_model = genai.GenerativeModel('gemini-2.5-flash')   # modelo rápido y con buen límite gratis
+gemini_model = genai.GenerativeModel('gemini-1.5-flash')   # modelo correcto y estable
 
-# ==================== FUNCIÓN CHAT CON FALLBACK ====================
 def chat(mensaje, historial):
-    if not mensaje.strip():
+    if not mensaje or not mensaje.strip():
         return "", historial, historial
 
-    # Prompt del sistema (más corto para ahorrar tokens)
-    system_prompt = f"""Eres un asistente amigable de zapatillas. 
-Tienes este catálogo real: {catalogo_texto}
-Responde SIEMPRE en español, corto, claro y útil.
-Si no encuentras algo, dilo con honestidad."""
+    # Prompt más corto para ahorrar tokens
+    system_prompt = f"""Eres un asistente amigable de zapatillas. Usa este catálogo real:
+{catalogo_texto}
 
-    # Construir mensajes con historial
-    mensajes = [{"role": "user", "content": system_prompt}]
+Responde en español, corto y útil. Si no sabes, dilo honestamente."""
 
+    # Construir historial
+    mensajes = [system_prompt]
     for user_msg, assistant_msg in historial:
-        mensajes.append({"role": "user", "content": user_msg})
-        mensajes.append({"role": "assistant", "content": assistant_msg})
+        mensajes.append(f"Usuario: {user_msg}")
+        mensajes.append(f"Asistente: {assistant_msg}")
+    mensajes.append(f"Usuario: {mensaje}")
 
-    mensajes.append({"role": "user", "content": mensaje})
+    respuesta = "Lo siento, ambos servicios están ocupados. Inténtalo de nuevo en unos segundos."
 
-    respuesta = None
-
-    # === 1. Intentar primero con Groq ===
+    # Primero Groq
     try:
-        respuesta = groq_client.chat.completions.create(
+        completion = groq_client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            messages=mensajes,
+            messages=[{"role": "user", "content": "\n".join(mensajes)}],
             max_tokens=400,
             temperature=0.7
-        ).choices[0].message.content
+        )
+        respuesta = completion.choices[0].message.content
     except Exception as e:
-        print(f"Groq falló: {e}")   # para ver en logs
+        print("Groq falló:", str(e))
 
-    # === 2. Si Groq falla, usar Gemini como respaldo ===
-    if not respuesta:
+    # Si Groq falla, usar Gemini
+    if "Lo siento" in respuesta or len(respuesta) < 10:
         try:
-            gemini_prompt = "\n".join([f"{m['role']}: {m['content']}" for m in mensajes])
-            response = gemini_model.generate_content(gemini_prompt)
+            full_prompt = "\n".join(mensajes)
+            response = gemini_model.generate_content(full_prompt)
             respuesta = response.text
-        except Exception as e2:
-            respuesta = "❌ Lo siento, ambos servicios están ocupados ahora. Inténtalo en unos minutos."
+        except Exception as e:
+            print("Gemini también falló:", str(e))
+            respuesta = "❌ Error temporal. Por favor intenta de nuevo."
 
-    # Actualizar historial
     historial.append([mensaje, respuesta])
 
     return "", historial, historial
 
 
-# ==================== INTERFAZ GRADIO ====================
+# Interfaz
 with gr.Blocks(title="👟 Bot Zapatillas") as demo:
     gr.Markdown("# 👟 Asistente de Zapatillas\n> Pregúntame por modelos, precios y marcas")
 
     historial_state = gr.State([])
     chatbot = gr.Chatbot(height=450, label="Chat")
     
-    msg = gr.Textbox(
-        placeholder="Ej: ¿Qué zapatillas tienen para mujer en talla 38?",
-        label="Tu pregunta"
-    )
+    msg = gr.Textbox(placeholder="Ej: ¿Tienen zapatillas Nike para mujer?", label="Tu pregunta")
 
     with gr.Row():
         enviar = gr.Button("Enviar 🚀", variant="primary")
         limpiar = gr.Button("🗑️ Limpiar")
 
-    # Conexiones
     msg.submit(chat, [msg, historial_state], [msg, historial_state, chatbot])
     enviar.click(chat, [msg, historial_state], [msg, historial_state, chatbot])
 
-    limpiar.click(
-        lambda: ([], [], []),
-        None,
-        [historial_state, chatbot, msg],
-        queue=False
-    )
+    limpiar.click(lambda: ([], [], []), None, [historial_state, chatbot, msg], queue=False)
 
 demo.launch()
