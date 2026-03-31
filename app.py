@@ -1,55 +1,71 @@
 import gradio as gr
 import pandas as pd
-from groq import Groq
 import os
+from groq import Groq
 
-# cargar catálogo
+# Cargar catálogo (solo una vez al iniciar el Space)
 df = pd.read_csv("catalogo.csv")
 catalogo_texto = df[["modelo","marca","categoria","genero","precio"]].to_string(index=False)
 
-# iniciar Groq
+# Cliente de Groq (usa la clave que guardaste en Secrets)
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-# función del chat
 def chat(mensaje, historial):
-    mensajes = [
-        {"role": "system", "content": f"""Eres un asistente amigable de zapatillas.
-Tienes este catálogo real:
+    if not mensaje.strip():                # ← evita mensajes vacíos
+        return "", historial, historial
 
+    # === 1. Construir mensajes para Groq (formato correcto) ===
+    mensajes = [
+        {"role": "system", "content": f"""Eres un asistente amigable y experto en zapatillas.
+Tienes este catálogo real:
 {catalogo_texto}
 
-Responde en español, corto y amigable.
-Si no encuentras algo dilo con honestidad."""}
+Responde SIEMPRE en español, corto, claro y amigable.
+Si no encuentras algo, dímelo con honestidad."""}
     ]
 
-    # agregar historial previo en formato diccionario
-    for turno in historial:
-        mensajes.append({"role": "user",      "content": turno["content"] if isinstance(turno, dict) and turno.get("role") == "user" else (turno[0] if isinstance(turno, list) else "")})
-        mensajes.append({"role": "assistant", "content": turno["content"] if isinstance(turno, dict) and turno.get("role") == "assistant" else (turno[1] if isinstance(turno, list) else "")})
+    # Agregar historial anterior (ahora en formato Gradio: listas [user, assistant])
+    for user_msg, assistant_msg in historial:   # ← aquí está la corrección principal
+        mensajes.append({"role": "user", "content": user_msg})
+        mensajes.append({"role": "assistant", "content": assistant_msg})
 
     mensajes.append({"role": "user", "content": mensaje})
 
-    respuesta = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=mensajes,
-        max_tokens=500
-    ).choices[0].message.content
+    # === 2. Llamada a Groq con manejo de errores ===
+    try:
+        respuesta = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=mensajes,
+            max_tokens=500,
+            temperature=0.7
+        ).choices[0].message.content
+    except Exception as e:
+        respuesta = f"❌ Error al conectar con Groq: {str(e)}\n\n¿Puedes intentarlo de nuevo?"
 
-    historial.append({"role": "user",      "content": mensaje})
-    historial.append({"role": "assistant", "content": respuesta})
-    return "", historial
+    # === 3. Actualizar historial en el formato correcto ===
+    historial.append([mensaje, respuesta])   # ← lista de 2 elementos
 
-# interfaz
+    # Devolvemos 3 valores: limpiar textbox + actualizar State + actualizar Chatbot
+    return "", historial, historial
+
+
+# === Interfaz Gradio ===
 with gr.Blocks(title="👟 Bot Zapatillas") as demo:
     gr.Markdown("# 👟 Asistente de Zapatillas\n> Pregúntame por modelos, precios y marcas")
-    historial_state = gr.State([])
-    chatbot = gr.Chatbot(height=300)
-    msg = gr.Textbox(placeholder="¿Qué zapatillas tienen para mujer?", label="Tu pregunta")
-    with gr.Row():
-        enviar  = gr.Button("Enviar 🚀", variant="primary")
-        limpiar = gr.Button("🗑️ Limpiar")
-    msg.submit(chat, [msg, historial_state], [msg, chatbot])
-    enviar.click(chat, [msg, historial_state], [msg, chatbot])
-    limpiar.click(lambda: ([], []), None, [historial_state, chatbot], queue=False)
 
-demo.launch()
+    historial_state = gr.State([])          # ← State que ahora sí se actualiza
+    chatbot = gr.Chatbot(height=400, label="Chat")
+    
+    msg = gr.Textbox(placeholder="Ej: ¿Qué zapatillas tienen para mujer?", label="Tu pregunta")
+
+    with gr.Row():
+        enviar = gr.Button("Enviar 🚀", variant="primary")
+        limpiar = gr.Button("🗑️ Limpiar")
+
+    # Conexiones (ahora coinciden con los 3 outputs de la función)
+    msg.submit(chat, [msg, historial_state], [msg, historial_state, chatbot])
+    enviar.click(chat, [msg, historial_state], [msg, historial_state, chatbot])
+
+    limpiar.click(lambda: ([], [], []), None, [historial_state, chatbot, msg], queue=False)
+
+demo.launch()   # ← buena práctica
